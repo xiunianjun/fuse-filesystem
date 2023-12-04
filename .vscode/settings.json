@@ -7,5 +7,6 @@
         "sfs.h": "c",
         "ddriver.h": "c",
         "errno.h": "c"
-    }
+    },
+    "cmake.sourceDirectory": "/home/xiunian/course/oslab2023/user-land-filesystem/fs/newfs"
 }
