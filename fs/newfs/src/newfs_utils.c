@@ -242,7 +242,11 @@ struct newfs_inode* newfs_read_inode(struct newfs_dentry * dentry, int ino) {
     struct newfs_inode_d inode_d;
     struct newfs_dentry* sub_dentry;
     struct newfs_dentry_d dentry_d;
-    int    dir_cnt = 0, i;
+    int    dir_cnt = 0;
+    int read_length = 0;
+    int offset = 0;
+    int index = 0;
+
     if (newfs_driver_read(NFS_INO_OFS(ino), (uint8_t *)&inode_d, 
                         sizeof(struct newfs_inode_d)) != NFS_ERROR_NONE) {
         NFS_DBG("[%s] io error\n", __func__);
@@ -255,12 +259,10 @@ struct newfs_inode* newfs_read_inode(struct newfs_dentry * dentry, int ino) {
     inode->dentry = dentry;
     inode->dentrys = NULL;
     if (NFS_IS_DIR(inode)) {
+        offset = NFS_DATA_OFS(inode->block_pointer[index ++]);
         dir_cnt = inode_d.dir_cnt;
-        // TODO 依然是注意blkno的连续性~
-        for (i = 0; i < dir_cnt; i++)
-        {
-            if (newfs_driver_read(NFS_DATA_OFS(inode->block_pointer[0]) + i * sizeof(struct newfs_dentry_d), 
-                                (uint8_t *)&dentry_d, 
+        for (int i = 0; i < dir_cnt; i ++) {
+            if (newfs_driver_read(offset, (uint8_t *)&dentry_d, 
                                 sizeof(struct newfs_dentry_d)) != NFS_ERROR_NONE) {
                 NFS_DBG("[%s] io error\n", __func__);
                 return NULL;                    
@@ -269,6 +271,12 @@ struct newfs_inode* newfs_read_inode(struct newfs_dentry * dentry, int ino) {
             sub_dentry->parent = inode->dentry;
             sub_dentry->ino    = dentry_d.ino; 
             newfs_alloc_dentry(inode, sub_dentry);
+            read_length += sizeof(struct newfs_dentry_d);
+            offset += sizeof(struct newfs_dentry_d);
+            if (read_length + sizeof(struct newfs_dentry_d) > NFS_LOGIC_SZ()) {
+                read_length = 0;
+                offset = NFS_DATA_OFS(inode->block_pointer[index ++]);
+            }
         }
     }
     else if (NFS_IS_REG(inode)) {
