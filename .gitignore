@@ -1,2 +1,5 @@
 .vscode/*
 build/*
+fs/newfs/build/
+fs/newfs/.vscode/
+fs/simplefs/

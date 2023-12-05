@@ -6,7 +6,12 @@
         "ioctl.h": "c",
         "sfs.h": "c",
         "ddriver.h": "c",
-        "errno.h": "c"
+        "errno.h": "c",
+        "newfs.h": "c",
+        "array": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "utility": "c"
     },
     "cmake.sourceDirectory": "/home/xiunian/course/oslab2023/user-land-filesystem/fs/newfs"
 }

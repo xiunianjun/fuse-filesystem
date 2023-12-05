@@ -518,6 +518,7 @@ int sfs_mount(struct custom_options options){
 
     sfs_super.driver_fd = driver_fd;
     ddriver_ioctl(SFS_DRIVER(), IOC_REQ_DEVICE_SIZE,  &sfs_super.sz_disk);
+    // 在这里设置了磁盘逻辑块大小为IO大小
     ddriver_ioctl(SFS_DRIVER(), IOC_REQ_DEVICE_IO_SZ, &sfs_super.sz_io);
     
     root_dentry = new_dentry("/", SFS_DIR);
