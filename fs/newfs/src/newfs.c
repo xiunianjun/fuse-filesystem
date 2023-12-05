@@ -41,17 +41,17 @@ static struct fuse_operations operations = {
 	.getattr = newfs_getattr,				 /* 获取文件属性，类似stat，必须完成 */
 	.readdir = newfs_readdir,				 /* 填充dentrys */
 	.mknod = newfs_mknod,					 /* 创建文件，touch相关 */
-	.write = NULL,								  	 /* 写入文件 */
-	.read = NULL,								  	 /* 读文件 */
+	.write = newfs_write,								  	 /* 写入文件 */
+	.read = newfs_read,								  	 /* 读文件 */
 	.utimens = newfs_utimens,				 /* 修改时间，忽略，避免touch报错 */
-	.truncate = NULL,						  		 /* 改变文件大小 */
-	.unlink = NULL,							  		 /* 删除文件 */
-	.rmdir	= NULL,							  		 /* 删除目录， rm -r */
-	.rename = NULL,							  		 /* 重命名，mv */
+	.truncate = newfs_truncate,						  		 /* 改变文件大小 */
+	.unlink = newfs_unlink,							  		 /* 删除文件 */
+	.rmdir	= newfs_rmdir,							  		 /* 删除目录， rm -r */
+	.rename = newfs_rename,							  		 /* 重命名，mv */
 
-	.open = NULL,							
-	.opendir = NULL,
-	.access = NULL
+	.open = newfs_open,							
+	.opendir = newfs_opendir,
+	.access = newfs_access
 };
 /******************************************************************************
 * SECTION: 必做函数实现
@@ -141,7 +141,7 @@ int newfs_getattr(const char* path, struct stat * newfs_stat) {
 	}
 	else if (NFS_IS_REG(dentry->inode)) {
 		newfs_stat->st_mode = S_IFREG | NFS_DEFAULT_PERM;
-		newfs_stat->st_size = dentry->inode->size;
+		newfs_stat->st_size = NFS_BLKS_SZ(dentry->inode->size);
 	}
 
 	newfs_stat->st_nlink = 1;
@@ -263,6 +263,26 @@ int newfs_utimens(const char* path, const struct timespec tv[2]) {
 int newfs_write(const char* path, const char* buf, size_t size, off_t offset,
 		        struct fuse_file_info* fi) {
 	/* 选做 */
+    boolean	is_find, is_root;
+	struct newfs_dentry* dentry = newfs_lookup(path, &is_find, &is_root);
+	struct newfs_inode*  inode;
+	
+	if (is_find == FALSE) {
+		return -NFS_ERROR_NOTFOUND;
+	}
+
+	inode = dentry->inode;
+	
+	if (NFS_IS_DIR(inode)) {
+		return -NFS_ERROR_ISDIR;	
+	}
+
+	if (NFS_BLKS_SZ(inode->size) < offset) {
+		return -NFS_ERROR_SEEK;
+	}
+
+	newfs_write_file(inode, buf, size, offset);
+
 	return size;
 }
 
@@ -279,6 +299,25 @@ int newfs_write(const char* path, const char* buf, size_t size, off_t offset,
 int newfs_read(const char* path, char* buf, size_t size, off_t offset,
 		       struct fuse_file_info* fi) {
 	/* 选做 */
+	boolean	is_find, is_root;
+	struct newfs_dentry* dentry = newfs_lookup(path, &is_find, &is_root);
+	struct newfs_inode*  inode;
+
+	if (is_find == FALSE) {
+		return -NFS_ERROR_NOTFOUND;
+	}
+
+	inode = dentry->inode;
+	
+	if (NFS_IS_DIR(inode)) {
+		return -NFS_ERROR_ISDIR;	
+	}
+
+	if (NFS_BLKS_SZ(inode->size) < offset) {
+		return -NFS_ERROR_SEEK;
+	}
+
+	newfs_read_file(inode, buf, size, offset);
 	return size;			   
 }
 
@@ -290,7 +329,19 @@ int newfs_read(const char* path, char* buf, size_t size, off_t offset,
  */
 int newfs_unlink(const char* path) {
 	/* 选做 */
-	return 0;
+	boolean	is_find, is_root;
+	struct newfs_dentry* dentry = newfs_lookup(path, &is_find, &is_root);
+	struct newfs_inode*  inode;
+
+	if (is_find == FALSE) {
+		return -NFS_ERROR_NOTFOUND;
+	}
+
+	inode = dentry->inode;
+
+	newfs_drop_inode(inode);
+	newfs_drop_dentry(dentry->parent->inode, dentry);
+	return NFS_ERROR_NONE;
 }
 
 /**
@@ -307,7 +358,7 @@ int newfs_unlink(const char* path) {
  */
 int newfs_rmdir(const char* path) {
 	/* 选做 */
-	return 0;
+	return newfs_unlink(path);
 }
 
 /**
@@ -319,7 +370,41 @@ int newfs_rmdir(const char* path) {
  */
 int newfs_rename(const char* from, const char* to) {
 	/* 选做 */
-	return 0;
+	int ret = NFS_ERROR_NONE;
+	boolean	is_find, is_root;
+	struct newfs_dentry* from_dentry = newfs_lookup(from, &is_find, &is_root);
+	struct newfs_inode*  from_inode;
+	struct newfs_dentry* to_dentry;
+	mode_t mode = 0;
+	if (is_find == FALSE) {
+		return -NFS_ERROR_NOTFOUND;
+	}
+
+	if (strcmp(from, to) == 0) {
+		return NFS_ERROR_NONE;
+	}
+
+	from_inode = from_dentry->inode;
+	
+	if (NFS_IS_DIR(from_inode)) {
+		mode = S_IFDIR;
+	}
+	else if (NFS_IS_REG(from_inode)) {
+		mode = S_IFREG;
+	}
+	
+	ret = newfs_mknod(to, mode, NULL);
+	if (ret != NFS_ERROR_NONE) {					  /* 保证目的文件不存在 */
+		return ret;
+	}
+	
+	to_dentry = newfs_lookup(to, &is_find, &is_root);	  
+	newfs_drop_inode(to_dentry->inode);				  /* 保证生成的inode被释放 */	
+	to_dentry->ino = from_inode->ino;				  /* 指向新的inode */
+	to_dentry->inode = from_inode;
+	
+	newfs_drop_dentry(from_dentry->parent->inode, from_dentry);
+	return ret;
 }
 
 /**
@@ -332,7 +417,7 @@ int newfs_rename(const char* from, const char* to) {
  */
 int newfs_open(const char* path, struct fuse_file_info* fi) {
 	/* 选做 */
-	return 0;
+	return NFS_ERROR_NONE;
 }
 
 /**
@@ -344,7 +429,7 @@ int newfs_open(const char* path, struct fuse_file_info* fi) {
  */
 int newfs_opendir(const char* path, struct fuse_file_info* fi) {
 	/* 选做 */
-	return 0;
+	return NFS_ERROR_NONE;
 }
 
 /**
@@ -356,7 +441,23 @@ int newfs_opendir(const char* path, struct fuse_file_info* fi) {
  */
 int newfs_truncate(const char* path, off_t offset) {
 	/* 选做 */
-	return 0;
+	boolean	is_find, is_root;
+	struct newfs_dentry* dentry = newfs_lookup(path, &is_find, &is_root);
+	struct newfs_inode*  inode;
+	
+	if (is_find == FALSE) {
+		return -NFS_ERROR_NOTFOUND;
+	}
+	
+	inode = dentry->inode;
+
+	if (NFS_IS_DIR(inode)) {
+		return -NFS_ERROR_ISDIR;
+	}
+
+	newfs_write_file(inode, NULL, offset, 0);
+
+	return NFS_ERROR_NONE;
 }
 
 
@@ -374,7 +475,31 @@ int newfs_truncate(const char* path, off_t offset) {
  */
 int newfs_access(const char* path, int type) {
 	/* 选做: 解析路径，判断是否存在 */
-	return 0;
+	boolean	is_find, is_root;
+	boolean is_access_ok = FALSE;
+	struct newfs_dentry* dentry = newfs_lookup(path, &is_find, &is_root);
+	struct newfs_inode*  inode;
+
+	switch (type)
+	{
+	case R_OK:
+		is_access_ok = TRUE;
+		break;
+	case F_OK:
+		if (is_find) {
+			is_access_ok = TRUE;
+		}
+		break;
+	case W_OK:
+		is_access_ok = TRUE;
+		break;
+	case X_OK:
+		is_access_ok = TRUE;
+		break;
+	default:
+		break;
+	}
+	return is_access_ok ? NFS_ERROR_NONE : -NFS_ERROR_ACCESS;
 }	
 
 /**

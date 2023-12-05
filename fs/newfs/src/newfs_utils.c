@@ -135,12 +135,8 @@ struct newfs_inode* newfs_alloc_inode(struct newfs_dentry * dentry) {
     
     inode->dir_cnt = 0;
     inode->dentrys = NULL;
+    inode->data = NULL;
     
-    // TODO, 动态分配，所以一开始先一个块也不分配
-    // if (NFS_IS_REG(inode)) {    
-        // inode->data = (uint8_t *)malloc(NFS_BLKS_SZ(1));
-    // }
-
     return inode;
 }
 
@@ -223,7 +219,6 @@ int newfs_sync_inode(struct newfs_inode * inode) {
  * @return int 
  */
 int newfs_alloc_dentry(struct newfs_inode* inode, struct newfs_dentry* dentry) {
-    printf("%d\n", inode->dir_cnt);
     if (inode->dir_cnt % DENTRY_PER_BLK == 0) {
         // 分配一个新数据块。动态增长
         inode->block_pointer[inode->size] = newfs_alloc_data_blk();
@@ -240,6 +235,173 @@ int newfs_alloc_dentry(struct newfs_inode* inode, struct newfs_dentry* dentry) {
     }
     inode->dir_cnt++;
     return inode->dir_cnt;
+}
+
+int newfs_read_file(struct newfs_inode* inode, char* data, int length, int offset) {
+    if (!(inode->data)) {
+        inode->data = (uint8_t*)malloc(sizeof(char) * NFS_BLKS_SZ(inode->size));
+        memset(inode->data, 0, sizeof(char) * NFS_BLKS_SZ(inode->size));
+        for (int i = 0; i < inode->size; i ++) {
+            if (newfs_driver_read(NFS_DATA_OFS(inode->block_pointer[i]), 
+                                inode->data + NFS_BLKS_SZ(i), 
+                                NFS_LOGIC_SZ()) != NFS_ERROR_NONE) {
+                NFS_DBG("[%s] io error\n", __func__);
+                return NULL;
+            }
+        }
+    }
+	memcpy(data, inode->data + offset, length);
+}
+
+int newfs_write_file(struct newfs_inode* inode, const char* data, int length, int offset) {
+    if (inode->size < (NFS_ROUND_UP(offset + length, NFS_LOGIC_SZ()) / NFS_LOGIC_SZ())) {
+        int nums = (NFS_ROUND_UP(offset + length, NFS_LOGIC_SZ()) / NFS_LOGIC_SZ()) - inode->size;
+        for (int i = 0; i < nums; i ++) {
+            inode->block_pointer[inode->size ++] = newfs_alloc_data_blk();
+        }
+        if (inode->data) {
+            char* initial_data = inode->data;
+            inode->data = (uint8_t*)malloc(sizeof(char) * NFS_BLKS_SZ(inode->size));
+            memcpy(inode->data, initial_data, NFS_BLKS_SZ(inode->size - nums));
+            free(initial_data);
+        } else {
+            inode->data = (uint8_t*)malloc(sizeof(char) * NFS_BLKS_SZ(inode->size));
+            memset(inode->data, 0, sizeof(char) * NFS_BLKS_SZ(inode->size));
+        }
+    }
+
+    if (data != NULL)
+	    memcpy(inode->data + offset, data, length);
+}
+
+/**
+ * @brief 将dentry从inode的dentrys中取出
+ * 
+ * @param inode 
+ * @param dentry 
+ * @return int 
+ */
+int newfs_drop_dentry(struct newfs_inode * inode, struct newfs_dentry * dentry) {
+    boolean is_find = FALSE;
+    struct newfs_dentry* dentry_cursor;
+    dentry_cursor = inode->dentrys;
+    
+    if (dentry_cursor == dentry) {
+        inode->dentrys = dentry->brother;
+        is_find = TRUE;
+    }
+    else {
+        while (dentry_cursor)
+        {
+            if (dentry_cursor->brother == dentry) {
+                dentry_cursor->brother = dentry->brother;
+                is_find = TRUE;
+                break;
+            }
+            dentry_cursor = dentry_cursor->brother;
+        }
+    }
+    if (!is_find) {
+        return -NFS_ERROR_NOTFOUND;
+    }
+    inode->dir_cnt--;
+    return inode->dir_cnt;
+}
+
+/**
+ * @brief 删除内存中的一个inode， 暂时不释放
+ * Case 1: Reg File
+ * 
+ *                  Inode
+ *                /      \
+ *            Dentry -> Dentry (Reg Dentry)
+ *                       |
+ *                      Inode  (Reg File)
+ * 
+ *  1) Step 1. Erase Bitmap     
+ *  2) Step 2. Free Inode                      (Function of newfs_drop_inode)
+ * ------------------------------------------------------------------------
+ *  3) *Setp 3. Free Dentry belonging to Inode (Outsider)
+ * ========================================================================
+ * Case 2: Dir
+ *                  Inode
+ *                /      \
+ *            Dentry -> Dentry (Dir Dentry)
+ *                       |
+ *                      Inode  (Dir)
+ *                    /     \
+ *                Dentry -> Dentry
+ * 
+ *   Recursive
+ * @param inode 
+ * @return int 
+ */
+int newfs_drop_inode(struct newfs_inode * inode) {
+    struct newfs_dentry*  dentry_cursor;
+    struct newfs_dentry*  dentry_to_free;
+    struct newfs_inode*   inode_cursor;
+
+    int byte_cursor = 0; 
+    int bit_cursor  = 0; 
+    int ino_cursor  = 0;
+    int data_cursor = 0;
+    boolean is_find = FALSE;
+
+    if (inode == newfs_super.root_dentry->inode) {
+        return NFS_ERROR_INVAL;
+    }
+
+    if (NFS_IS_DIR(inode)) {
+        dentry_cursor = inode->dentrys;
+                                                      /* 递归向下drop */
+        while (dentry_cursor)
+        {   
+            inode_cursor = dentry_cursor->inode;
+            newfs_drop_inode(inode_cursor);
+            newfs_drop_dentry(inode, dentry_cursor);
+            dentry_to_free = dentry_cursor;
+            dentry_cursor = dentry_cursor->brother;
+            free(dentry_to_free);
+        }
+    }
+
+    for (byte_cursor = 0; byte_cursor < NFS_BLKS_SZ(newfs_super.ino_map_blks); 
+        byte_cursor++)                            /* 调整inodemap */
+    {
+        for (bit_cursor = 0; bit_cursor < UINT8_BITS; bit_cursor++) {
+            if (ino_cursor == inode->ino) {
+                    newfs_super.map_inode[byte_cursor] &= (uint8_t)(~(0x1 << bit_cursor));
+                    is_find = TRUE;
+                    break;
+            }
+            ino_cursor++;
+        }
+        if (is_find == TRUE) {
+            break;
+        }
+    }
+
+    for (byte_cursor = 0; byte_cursor < NFS_BLKS_SZ(newfs_super.data_map_blks); 
+        byte_cursor++)                            /* 调整inodemap */
+    {
+        for (bit_cursor = 0; bit_cursor < UINT8_BITS; bit_cursor++) {
+            if (data_cursor == inode->ino) {
+                    newfs_super.map_data[byte_cursor] &= (uint8_t)(~(0x1 << bit_cursor));
+                    is_find = TRUE;
+                    break;
+            }
+            data_cursor++;
+        }
+        if (is_find == TRUE) {
+            break;
+        }
+    }
+
+    if (inode->data)
+        free(inode->data);
+    free(inode);
+
+    return NFS_ERROR_NONE;
 }
 
 /**
