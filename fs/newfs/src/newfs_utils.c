@@ -232,6 +232,27 @@ int newfs_alloc_dentry(struct newfs_inode* inode, struct newfs_dentry* dentry) {
 /**
  * @brief 
  * 
+ * @param inode 
+ * @param dir [0...]
+ * @return struct newfs_dentry* 
+ */
+struct newfs_dentry* newfs_get_dentry(struct newfs_inode * inode, int dir) {
+    struct newfs_dentry* dentry_cursor = inode->dentrys;
+    int    cnt = 0;
+    while (dentry_cursor)
+    {
+        if (dir == cnt) {
+            return dentry_cursor;
+        }
+        cnt++;
+        dentry_cursor = dentry_cursor->brother;
+    }
+    return NULL;
+}
+
+/**
+ * @brief 
+ * 
  * @param dentry dentry指向ino，读取该inode
  * @param ino inode唯一编号
  * @return struct newfs_inode* 
@@ -290,6 +311,142 @@ struct newfs_inode* newfs_read_inode(struct newfs_dentry * dentry, int ino) {
         }
     }
     return inode;
+}
+
+/**
+ * @brief 获取文件名
+ * 
+ * @param path 
+ * @return char* 
+ */
+char* newfs_get_fname(const char* path) {
+    char ch = '/';
+    char *q = strrchr(path, ch) + 1;
+    return q;
+}
+
+/**
+ * @brief 计算路径的层级
+ * exm: /av/c/d/f
+ * -> lvl = 4
+ * @param path 
+ * @return int 
+ */
+int newfs_calc_lvl(const char * path) {
+    char* str = path;
+    int   lvl = 0;
+    if (strcmp(path, "/") == 0) {
+        return lvl;
+    }
+    while (*str != 0) {
+        if (*str == '/') {
+            lvl++;
+        }
+        str++;
+    }
+    return lvl;
+}
+
+/**
+ * @brief 
+ * 解析路径，返回文件对应的上级目录。
+ * path: /qwe/ad  total_lvl = 2,
+ *      1) find /'s inode       lvl = 1
+ *      2) find qwe's dentry 
+ *      3) find qwe's inode     lvl = 2
+ *      4) find ad's dentry
+ *
+ * path: /qwe     total_lvl = 1,
+ *      1) find /'s inode       lvl = 1
+ *      2) find qwe's dentry
+ * 
+ * @param path 
+ * @return struct newfs_inode* 
+ */
+struct newfs_dentry* newfs_lookup(const char * path, boolean* is_find, boolean* is_root) {
+    struct newfs_dentry* dentry_cursor = newfs_super.root_dentry;
+    struct newfs_dentry* dentry_ret = NULL;
+    struct newfs_inode*  inode; 
+    int   total_lvl = newfs_calc_lvl(path);
+    int   lvl = 0;
+    boolean is_hit;
+    char* fname = NULL;
+    char* path_cpy = (char*)malloc(sizeof(path));
+    *is_root = FALSE;
+    strcpy(path_cpy, path);
+
+    if (total_lvl == 0) {                           /* 根目录 */
+        *is_find = TRUE;
+        *is_root = TRUE;
+        dentry_ret = newfs_super.root_dentry;
+    }
+    fname = strtok(path_cpy, "/");       
+    while (fname)
+    {   
+        lvl++;
+        if (dentry_cursor->inode == NULL) {           /* Cache机制 */
+            newfs_read_inode(dentry_cursor, dentry_cursor->ino);
+        }
+
+        inode = dentry_cursor->inode;   // 一层一层地获取每级目录的inode
+
+        if (NFS_IS_REG(inode) && lvl < total_lvl) {
+            NFS_DBG("[%s] not a dir\n", __func__);
+            dentry_ret = inode->dentry;
+            break;
+        }
+        if (NFS_IS_DIR(inode)) {
+            dentry_cursor = inode->dentrys;
+            is_hit        = FALSE;
+
+            while (dentry_cursor)   // 遍历所有目录项
+            {
+                if (memcmp(dentry_cursor->name, fname, strlen(fname)) == 0) {
+                    is_hit = TRUE;
+                    break;
+                }
+                dentry_cursor = dentry_cursor->brother;
+            }
+            
+            if (!is_hit) {
+                *is_find = FALSE;
+                NFS_DBG("[%s] not found %s\n", __func__, fname);
+                dentry_ret = inode->dentry;
+                break;
+            }
+
+            if (is_hit && lvl == total_lvl) {
+                *is_find = TRUE;
+                dentry_ret = dentry_cursor;
+                break;
+            }
+        }
+        fname = strtok(NULL, "/"); 
+    }
+
+    if (dentry_ret->inode == NULL) {
+        dentry_ret->inode = newfs_read_inode(dentry_ret, dentry_ret->ino);
+    }
+    
+    return dentry_ret;
+}
+
+void print_statistics() {
+    printf("==================================================\n");
+    printf("==================================================\n");
+    printf("sb_offset : %d\n", newfs_super.sb_offset);      /* 建立 in-memory 结构 */
+    printf("sb_blks : %d\n", newfs_super.sb_blks);
+    printf("ino_map_offset : %d\n", newfs_super.ino_map_offset);
+    printf("ino_map_blks : %d\n", newfs_super.ino_map_blks);
+    printf("data_map_offset : %d\n", newfs_super.data_map_offset);
+    printf("data_map_blks : %d\n", newfs_super.data_map_blks);
+    printf("ino_offset : %d\n", newfs_super.ino_offset);
+    printf("ino_blks : %d\n", newfs_super.ino_blks);
+    printf("data_offset : %d\n", newfs_super.data_offset);
+    printf("data_blks : %d\n", newfs_super.data_blks);
+    printf("sz_usage    : %d\n", newfs_super.sz_usage   );
+    printf("==================================================\n");
+    printf("==================================================\n");
 }
 
 /**
@@ -373,6 +530,7 @@ int newfs_mount(struct custom_options options){
     newfs_super.data_offset = newfs_super_d.data_offset;
     newfs_super.data_blks = newfs_super_d.data_blks;
     newfs_super.sz_usage    = newfs_super_d.sz_usage;
+    print_statistics();
 
     // TODO: if init, should zero?
     newfs_super.map_inode = (uint8_t *)malloc(NFS_BLKS_SZ(newfs_super.ino_map_blks));

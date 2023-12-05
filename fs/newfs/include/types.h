@@ -56,7 +56,6 @@ typedef int          boolean;
 
 #define NFS_IS_DIR(pinode)              (pinode->dentry->ftype == NFS_DIR)
 #define NFS_IS_REG(pinode)              (pinode->dentry->ftype == NFS_REG_FILE)
-#define NFS_IS_SYM_LINK(pinode)         (pinode->dentry->ftype == NFS_SYM_LINK)
 struct newfs_dentry;
 struct newfs_inode;
 struct newfs_super;
