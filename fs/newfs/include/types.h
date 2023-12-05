@@ -44,18 +44,18 @@ typedef int          boolean;
 #define NFS_DISK_SZ()                   (newfs_super.sz_disk)
 #define NFS_DRIVER()                    (newfs_super.driver_fd)
 
-#define NFS_ROUND_DOWN(value, round)    (value % round == 0 ? value : (value / round) * round)
-#define NFS_ROUND_UP(value, round)      (value % round == 0 ? value : (value / round + 1) * round)
+#define NFS_ROUND_DOWN(value, round)    ((value) % (round) == 0 ? (value) : ((value) / (round)) * (round))
+#define NFS_ROUND_UP(value, round)      ((value) % (round) == 0 ? (value) : ((value) / (round) + 1) * (round))
 
-#define NFS_BLKS_SZ(blks)               (blks * NFS_LOGIC_SZ())
-#define NFS_ASSIGN_FNAME(pnewfs_dentry, _fname) memcpy(pnewfs_dentry->name, _fname, strlen(_fname))
+#define NFS_BLKS_SZ(blks)               ((blks) * NFS_LOGIC_SZ())
+#define NFS_ASSIGN_FNAME(pnewfs_dentry, _fname) memcpy((pnewfs_dentry)->name, (_fname), strlen((_fname)))
 // data和inode的布局不一样，所以offset计算方式也不同
 // 多个ino可以在同一个块内，一个dno代表一个块
 #define NFS_INO_OFS(ino)                (NFS_BLKS_SZ(newfs_super.ino_offset) + (ino) * sizeof(struct newfs_inode_d))
 #define NFS_DATA_OFS(dno)               (NFS_BLKS_SZ(newfs_super.data_offset + (dno)))
 
-#define NFS_IS_DIR(pinode)              (pinode->dentry->ftype == NFS_DIR)
-#define NFS_IS_REG(pinode)              (pinode->dentry->ftype == NFS_REG_FILE)
+#define NFS_IS_DIR(pinode)              ((pinode)->dentry->ftype == NFS_DIR)
+#define NFS_IS_REG(pinode)              ((pinode)->dentry->ftype == NFS_REG_FILE)
 struct newfs_dentry;
 struct newfs_inode;
 struct newfs_super;
@@ -169,6 +169,8 @@ struct newfs_dentry_d
     NFS_FILE_TYPE      ftype;
     int                ino;                           /* 指向的ino号 */
 };  
+
+#define DENTRY_PER_BLK   (NFS_LOGIC_SZ() / sizeof(struct newfs_dentry_d))
 
 // ####################### Functions #######################
 static inline struct newfs_dentry* new_dentry(char * fname, NFS_FILE_TYPE ftype) {

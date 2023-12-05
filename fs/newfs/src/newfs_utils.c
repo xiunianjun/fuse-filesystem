@@ -174,8 +174,11 @@ int newfs_sync_inode(struct newfs_inode * inode) {
     dentry_cursor = inode->dentrys;
     if (NFS_IS_DIR(inode) && dentry_cursor != NULL) {   
         offset = NFS_DATA_OFS(inode->block_pointer[index ++]);
+        // printf("write into data blk %d\n", inode->block_pointer[index - 1]);
+        // printf("logic blk size = %d, blk size = %d, data offset = %d, block ptr[0] = %d\n", NFS_LOGIC_SZ(), NFS_BLKS_SZ(1), newfs_super.data_offset, inode->block_pointer[index - 1]);
+        // printf("right offset: %d actual: %d\n", (newfs_super.data_offset + (inode->block_pointer[index - 1])) * NFS_LOGIC_SZ(), (NFS_BLKS_SZ(newfs_super.data_offset + (inode->block_pointer[index - 1]))));
         while (dentry_cursor != NULL) {
-            assert(index < NFS_MAX_SIZE_PER_FILE);
+            assert(index - 1 < inode->size);
             memcpy(dentry_d.fname, dentry_cursor->name, NFS_MAX_FILE_NAME);
             dentry_d.ftype = dentry_cursor->ftype;
             dentry_d.ino = dentry_cursor->ino;
@@ -184,6 +187,7 @@ int newfs_sync_inode(struct newfs_inode * inode) {
                 NFS_DBG("[%s] io error\n", __func__);
                 return -NFS_ERROR_IO;                     
             }
+            // printf("write into offset %d\n", offset);
             
             if (dentry_cursor->inode != NULL) {
                 newfs_sync_inode(dentry_cursor->inode);
@@ -195,6 +199,7 @@ int newfs_sync_inode(struct newfs_inode * inode) {
             if (write_length + sizeof(struct newfs_dentry_d) > NFS_LOGIC_SZ()) {
                 write_length = 0;
                 offset = NFS_DATA_OFS(inode->block_pointer[index ++]);
+                // printf("write into data blk %d\n", inode->block_pointer[index - 1]);
             }
         }
     }
@@ -218,6 +223,14 @@ int newfs_sync_inode(struct newfs_inode * inode) {
  * @return int 
  */
 int newfs_alloc_dentry(struct newfs_inode* inode, struct newfs_dentry* dentry) {
+    printf("%d\n", inode->dir_cnt);
+    if (inode->dir_cnt % DENTRY_PER_BLK == 0) {
+        // 分配一个新数据块。动态增长
+        inode->block_pointer[inode->size] = newfs_alloc_data_blk();
+        inode->size ++;
+        printf("allocate a data blk. %d\n", inode->block_pointer[inode->size - 1]);
+        // newfs_dump_data_map();
+    }
     if (inode->dentrys == NULL) {
         inode->dentrys = dentry;
     }
@@ -333,7 +346,7 @@ char* newfs_get_fname(const char* path) {
  * @return int 
  */
 int newfs_calc_lvl(const char * path) {
-    char* str = path;
+    const char* str = path;
     int   lvl = 0;
     if (strcmp(path, "/") == 0) {
         return lvl;
